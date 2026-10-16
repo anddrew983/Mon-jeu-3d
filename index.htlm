@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Monde 3D réaliste</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#9bd9ff;font-family:Arial;touch-action:none}
+canvas{display:block}
+button{background:#20252bdd;color:white;border:2px solid #aaa;border-radius:10px;font-weight:bold;touch-action:none}
+#hud{position:fixed;top:8px;left:8px;background:#0009;color:white;padding:9px;border-radius:8px;font-size:12px;pointer-events:none}
+#inventory{position:fixed;top:8px;right:5px;display:flex;gap:3px}
+.slot{width:40px;height:43px;font-size:20px;padding:0}
+.selected{border:3px solid yellow}
+#controls{position:fixed;bottom:18px;left:10px;display:grid;grid-template-columns:52px 52px 52px;grid-template-rows:52px 52px;gap:4px}
+#up{grid-column:2}
+#left{grid-column:1;grid-row:2}
+#down{grid-column:2;grid-row:2}
+#right{grid-column:3;grid-row:2}
+#actions{position:fixed;bottom:18px;right:10px;display:flex;gap:5px}
+.action{width:60px;height:58px;font-size:12px}
+#jump{position:fixed;bottom:87px;right:17px;width:65px;height:48px}
+#hint{position:fixed;bottom:2px;left:50%;transform:translateX(-50%);background:#0008;color:white;padding:5px;border-radius:6px;font-size:10px;white-space:nowrap}
+</style>
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9713764414342485" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="hud">🌍 Monde 3D<br>Chargement...</div>
+
+<div id="inventory">
+<button class="slot selected" data-type="grass">🌿</button>
+<button class="slot" data-type="dirt">🟫</button>
+<button class="slot" data-type="stone">🪨</button>
+<button class="slot" data-type="wood">🪵</button>
+<button class="slot" data-type="leaves">🌳</button>
+<button class="slot" data-type="glass">🔷</button>
+</div>
+
+<div id="controls">
+<button id="up">⬆️</button>
+<button id="left">⬅️</button>
+<button id="down">⬇️</button>
+<button id="right">➡️</button>
+</div>
+
+<button id="jump">SAUTER</button>
+
+<div id="actions">
+<button class="action" id="break">⛏️<br>CASSER</button>
+<button class="action" id="place">🧱<br>POSER</button>
+</div>
+
+<div id="hint">Glisse ton doigt au centre pour regarder autour de toi.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+if(!window.THREE){
+ document.body.innerHTML="Internet est nécessaire pour charger le jeu.";
+ throw new Error("Three.js indisponible");
+}
+
+// MONDE ET LUMIÈRE
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x91cbed);
+scene.fog=new THREE.Fog(0x91cbed,70,180);
+
+const camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.1,500);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xd7ecff,0x526044,1.7));
+
+const sun=new THREE.DirectionalLight(0xfff0d6,2.1);
+sun.position.set(35,60,25);
+sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left=-35;
+sun.shadow.camera.right=35;
+sun.shadow.camera.top=35;
+sun.shadow.camera.bottom=-35;
+scene.add(sun);
+
+// TEXTURES PROCÉDURALES
+function texture(base,colors,count=700){
+ const c=document.createElement("canvas");
+ c.width=c.height=64;
+ const ctx=c.getContext("2d");
+ ctx.fillStyle=base;
+ ctx.fillRect(0,0,64,64);
+
+ for(let i=0;i<count;i++){
+  ctx.globalAlpha=.15+Math.random()*.35;
+  ctx.fillStyle=colors[Math.floor(Math.random()*colors.length)];
+  const x=Math.random()*64,y=Math.random()*64;
+  const s=1+Math.random()*4;
+  ctx.fillRect(x,y,s,s);
+ }
+ ctx.globalAlpha=1;
+
+ const t=new THREE.CanvasTexture(c);
+ t.magFilter=THREE.NearestFilter;
+ t.minFilter=THREE.LinearMipmapLinearFilter;
+ t.wrapS=t.wrapT=THREE.RepeatWrapping;
+ return t;
+}
+
+function material(color,colors){
+ return new THREE.MeshLambertMaterial({
+  map:texture(color,colors)
+ });
+}
+
+const grassTop=material("#579b36",["#74b947","#367b2b","#8acb52"]);
+const dirt=material("#79502d",["#654020","#99683b","#583b25"]);
+const stone=material("#858585",["#a2a2a2","#666666","#777777"]);
+const wood=material("#80532d",["#5d381c","#a87943","#70431f"]);
+const leaves=material("#317c30",["#4c9b38","#206326","#75a84a"]);
+const roof=material("#974a35",["#b35e42","#743222","#873b2b"]);
+
+const grassMat=[
+ dirt,dirt,grassTop,dirt,dirt,dirt
+];
+
+const glass=new THREE.MeshLambertMaterial({
+ color:0x8bdcff,
+ transparent:true,
+ opacity:.48
+});
+
+const materials={
+ grass:grassMat,
+ dirt:dirt,
+ stone:stone,
+ wood:wood,
+ leaves:leaves,
+ glass:glass,
+ roof:roof
+};
+
+const cube=new THREE.BoxGeometry(1,1,1);
+const blocks=[];
+const blockMap=new Map();
+const chunks=new Set();
+const villages=new Set();
+const villagers=[];
+
+let selected="grass";
+let yaw=0,pitch=0;
+let verticalSpeed=0;
+let grounded=false;
+
+const PLAYER_RADIUS=.3;
+const PLAYER_HEIGHT=1.8;
+const EYE_HEIGHT=1.6;
+
+const move={up:false,down:false,left:false,right:false};
+const keys={};
+const ray=new THREE.Raycaster();
+ray.far=7;
+
+function key(x,y,z){
+ return `${Math.round(x)},${Math.round(y)},${Math.round(z)}`;
+}
+
+function addBlock(x,y,z,type){
+ x=Math.round(x);
+ y=Math.round(y);
+ z=Math.round(z);
+
+ const k=key(x,y,z);
+ if(blockMap.has(k))return null;
+
+ const mesh=new THREE.Mesh(cube,materials[type]||grassMat);
+ mesh.position.set(x,y,z);
+ mesh.castShadow=true;
+ mesh.receiveShadow=true;
+ mesh.userData={x,y,z,type};
+
+ scene.add(mesh);
+ blocks.push(mesh);
+ blockMap.set(k,mesh);
+ return mesh;
+}
+
+function removeBlock(mesh){
+ if(!mesh)return;
+
+ const p=mesh.userData;
+ blockMap.delete(key(p.x,p.y,p.z));
+ scene.remove(mesh);
+
+ const i=blocks.indexOf(mesh);
+ if(i>=0)blocks.splice(i,1);
+}
+
+function terrainHeight(x,z){
+ return Math.floor(
+  Math.sin(x*.085)*1.5+
+  Math.cos(z*.09)*1.4+
+  Math.sin((x+z)*.045)*1.7
+ );
+}
+
+// COLLISIONS : LE JOUEUR NE TRAVERSE PAS LES BLOCS
+function collides(){
+ const px=camera.position.x;
+ const py=camera.position.y-EYE_HEIGHT;
+ const pz=camera.position.z;
+
+ const minX=Math.floor(px-PLAYER_RADIUS-.5);
+ const maxX=Math.floor(px+PLAYER_RADIUS+.5);
+ const minY=Math.floor(py-.5);
+ const maxY=Math.floor(py+PLAYER_HEIGHT-.5);
+ const minZ=Math.floor(pz-PLAYER_RADIUS-.5);
+ const maxZ=Math.floor(pz+PLAYER_RADIUS+.5);
+
+ for(let x=minX;x<=maxX;x++){
+  for(let y=minY;y<=maxY;y++){
+   for(let z=minZ;z<=maxZ;z++){
+    if(!blockMap.has(key(x,y,z)))continue;
+
+    const overlapX=Math.abs(px-x)<PLAYER_RADIUS+.5;
+    const overlapY=py<y+.5 && py+PLAYER_HEIGHT>y-.5;
+    const overlapZ=Math.abs(pz-z)<PLAYER_RADIUS+.5;
+
+    if(overlapX&&overlapY&&overlapZ)return true;
+   }
+  }
+ }
+ return false;
+}
+
+function makeTree(x,y,z){
+ const h=3+Math.floor(Math.random()*3);
+
+ for(let i=1;i<=h;i++)addBlock(x,y+i,z,"wood");
+
+ for(let dx=-2;dx<=2;dx++){
+  for(let dz=-2;dz<=2;dz++){
+   for(let dy=h-1;dy<=h+2;dy++){
+    if(Math.abs(dx)+Math.abs(dz)+Math.abs(dy-h)<=4){
+     addBlock(x+dx,y+dy,z+dz,"leaves");
+    }
+   }
+  }
+ }
+}
+
+function makeHouse(x,z){
+ const y=terrainHeight(x,z);
+
+ for(let dx=0;dx<5;dx++){
+  for(let dz=0;dz<5;dz++){
+   addBlock(x+dx,y,z+dz,"wood");
+
+   for(let dy=1;dy<=3;dy++){
+    const edge=dx===0||dx===4||dz===0||dz===4;
+    if(!edge)continue;
+
+    const door=dz===0&&dx===2&&dy<=2;
+    const window=dy===2&&
+      ((dx===0&&dz===2)||(dx===4&&dz===2));
+
+    if(!door){
+     addBlock(x+dx,y+dy,z+dz,window?"glass":"wood");
+    }
+   }
+
+   addBlock(x+dx,y+4,z+dz,"roof");
+  }
+ }
+}
+
+const skin=new THREE.MeshLambertMaterial({color:0xb77c50});
+const clothes=new THREE.MeshLambertMaterial({color:0x6654a1});
+
+function makeVillager(x,z){
+ const y=terrainHeight(x,z)+1;
+ const group=new THREE.Group();
+
+ const body=new THREE.Mesh(
+  new THREE.BoxGeometry(.65,1,.45),clothes
+ );
+ body.position.y=.7;
+ group.add(body);
+
+ const head=new THREE.Mesh(
+  new THREE.BoxGeometry(.55,.55,.55),skin
+ );
+ head.position.y=1.5;
+ group.add(head);
+
+ group.position.set(x,y,z);
+ scene.add(group);
+
+ villagers.push({
+  group,x,z,
+  phase:Math.random()*6.28
+ });
+}
+
+function makeVillage(x,z){
+ const id=`${x},${z}`;
+ if(villages.has(id))return;
+ villages.add(id);
+
+ makeHouse(x-7,z-5);
+ makeHouse(x+2,z-5);
+ makeHouse(x-3,z+5);
+
+ for(let i=0;i<6;i++){
+  makeVillager(
+   x+Math.floor(Math.random()*13)-6,
+   z+Math.floor(Math.random()*13)-6
+  );
+ }
+}
+
+// MONDE QUI S'ÉTEND QUAND TU AVANCES
+function generateChunk(cx,cz){
+ const id=`${cx},${cz}`;
+ if(chunks.has(id))return;
+ chunks.add(id);
+
+ const size=12;
+ const sx=cx*size,sz=cz*size;
+
+ for(let x=sx;x<sx+size;x++){
+  for(let z=sz;z<sz+size;z++){
+   const h=terrainHeight(x,z);
+
+   addBlock(x,h,z,"grass");
+   addBlock(x,h-1,z,"dirt");
+   addBlock(x,h-2,z,"dirt");
+   addBlock(x,h-3,z,"stone");
+
+   if(Math.random()<.025&&Math.abs(x)>7&&Math.abs(z)>7){
+    makeTree(x,h,z);
+   }
+  }
+ }
+
+ const vx=Math.round(cx/4)*48;
+ const vz=Math.round(cz/4)*48;
+
+ if(Math.abs(sx-vx)<size&&Math.abs(sz-vz)<size){
+  makeVillage(vx,vz);
+ }
+}
+
+function generateWorld(){
+ const cx=Math.floor(camera.position.x/12);
+ const cz=Math.floor(camera.position.z/12);
+
+ for(let x=cx-2;x<=cx+2;x++){
+  for(let z=cz-2;z<=cz+2;z++){
+   generateChunk(x,z);
+  }
+ }
+}
+
+// DÉPART DIRECT DANS LE MONDE
+camera.position.set(0,terrainHeight(0,8)+EYE_HEIGHT+.55,8);
+generateWorld();
+// Place le joueur exactement au-dessus du sol après génération du terrain.
+verticalSpeed=0;
+grounded=true;
+
+function updateCamera(){
+ camera.rotation.order="YXZ";
+ camera.rotation.y=yaw;
+ camera.rotation.x=pitch;
+}
+
+function bindMove(id,name){
+ const el=document.getElementById(id);
+
+ el.addEventListener("pointerdown",e=>{
+  e.preventDefault();
+  move[name]=true;
+ });
+
+ ["pointerup","pointercancel","pointerleave"].forEach(event=>{
+  el.addEventListener(event,()=>move[name]=false);
+ });
+}
+
+bindMove("up","up");
+bindMove("down","down");
+bindMove("left","left");
+bindMove("right","right");
+
+function jump(){
+ if(grounded){
+  verticalSpeed=8;
+  grounded=false;
+ }
+}
+
+document.getElementById("jump").addEventListener("pointerdown",e=>{
+ e.preventDefault();
+ jump();
+});
+
+addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(e.code==="Space")jump();
+});
+
+addEventListener("keyup",e=>{
+ keys[e.key.toLowerCase()]=false;
+});
+
+document.querySelectorAll(".slot").forEach(button=>{
+ button.addEventListener("click",()=>{
+  document.querySelectorAll(".slot").forEach(b=>{
+   b.classList.remove("selected");
+  });
+  button.classList.add("selected");
+  selected=button.dataset.type;
+ });
+});
+
+function findTarget(){
+ ray.setFromCamera(new THREE.Vector2(0,0),camera);
+ return ray.intersectObjects(blocks,false);
+}
+
+document.getElementById("break").addEventListener("click",()=>{
+ const hits=findTarget();
+
+ if(hits.length){
+  const p=hits[0].object.userData;
+
+  if(p.y>=terrainHeight(p.x,p.z)-2){
+   removeBlock(hits[0].object);
+  }
+ }
+});
+
+document.getElementById("place").addEventListener("click",()=>{
+ const hits=findTarget();
+ if(!hits.length)return;
+
+ const hit=hits[0];
+ const normal=hit.face.normal.clone()
+  .transformDirection(hit.object.matrixWorld);
+
+ const p=hit.object.position.clone().add(normal);
+ if(p.distanceTo(camera.position)<1.5)return;
+
+ const newBlock=addBlock(p.x,p.y,p.z,selected);
+
+ // Empêche de poser un bloc directement dans le joueur.
+ if(newBlock&&collides()){
+  removeBlock(newBlock);
+ }
+});
+
+// REGARD : SENSIBILITÉ AMÉLIORÉE
+let looking=false,lastX=0,lastY=0;
+
+renderer.domElement.addEventListener("pointerdown",e=>{
+ looking=true;
+ lastX=e.clientX;
+ lastY=e.clientY;
+});
+
+addEventListener("pointerup",()=>looking=false);
+addEventListener("pointercancel",()=>looking=false);
+
+addEventListener("pointermove",e=>{
+ if(!looking)return;
+
+ yaw-=(e.clientX-lastX)*.009;
+ pitch-=(e.clientY-lastY)*.009;
+
+ pitch=Math.max(-1.45,Math.min(1.45,pitch));
+ lastX=e.clientX;
+ lastY=e.clientY;
+});
+
+// DÉPLACEMENT AVEC COLLISIONS FIABLES : sous-étapes pour ne pas traverser les blocs.
+function updatePlayer(dt){
+  const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
+  const side=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
+  const dir=new THREE.Vector3();
+  if(move.up||keys["w"]||keys["arrowup"])dir.add(forward);
+  if(move.down||keys["s"]||keys["arrowdown"])dir.sub(forward);
+  if(move.left||keys["a"]||keys["arrowleft"])dir.sub(side);
+  if(move.right||keys["d"]||keys["arrowright"])dir.add(side);
+
+  if(dir.lengthSq()>0){
+    dir.normalize().multiplyScalar(6*dt);
+    const steps=Math.max(1,Math.ceil(Math.max(Math.abs(dir.x),Math.abs(dir.z))/.08));
+    const sx=dir.x/steps, sz=dir.z/steps;
+    for(let i=0;i<steps;i++){
+      camera.position.x+=sx;
+      if(collides())camera.position.x-=sx;
+      camera.position.z+=sz;
+      if(collides())camera.position.z-=sz;
+    }
+  }
+
+  // Gravité en petits pas : le joueur ne peut pas sauter au travers d'un bloc.
+  verticalSpeed=Math.max(verticalSpeed-20*dt,-18);
+  const dy=verticalSpeed*dt;
+  const stepsY=Math.max(1,Math.ceil(Math.abs(dy)/.06));
+  const sy=dy/stepsY;
+  grounded=false;
+  for(let i=0;i<stepsY;i++){
+    camera.position.y+=sy;
+    if(collides()){
+      camera.position.y-=sy;
+      if(sy<0)grounded=true;
+      verticalSpeed=0;
+      break;
+    }
+  }
+
+  // Sécurité au départ : si le personnage se trouve dans un bloc, le remonter au-dessus du sol.
+  if(collides()){
+    for(let i=0;i<100&&collides();i++)camera.position.y+=.05;
+    verticalSpeed=0;
+    grounded=true;
+  }
+  generateWorld();
+}
+
+function updateVillagers(dt){
+ for(const v of villagers){
+  v.phase+=dt*.7;
+  v.group.position.x=v.x+Math.sin(v.phase)*1.5;
+  v.group.position.z=v.z+Math.cos(v.phase*.7)*1.5;
+ }
+}
+
+const clock=new THREE.Clock();
+
+function animate(){
+ requestAnimationFrame(animate);
+
+ const dt=Math.min(clock.getDelta(),.035);
+
+ updatePlayer(dt);
+ updateVillagers(dt);
+ updateCamera();
+
+ document.getElementById("hud").innerHTML=
+  "🌍 Monde 3D"+
+  "<br>Position : "+
+  Math.floor(camera.position.x)+", "+
+  Math.floor(camera.position.z)+
+  "<br>Blocs : "+blocks.length+
+  "<br>Villages : "+villages.size+
+  "<br>Bloc : "+selected;
+
+ renderer.render(scene,camera);
+}
+
+animate();
+
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
